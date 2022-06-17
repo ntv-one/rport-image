@@ -1,0 +1,83 @@
+name: Docker CI
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# Be sure to set the following items:
+#
+#   $REPO           # Docker Hub/container registry repo
+#   $IMAGE_NAME     # Name of the image to push
+
+on:
+  push:
+    branches:
+      - 'build'
+      - 'release'
+
+  # Publish semver tags as releases.
+  tags:
+    - 'v*.*.*'
+    - 'latest'
+  
+  pull_request:
+    branches:
+      - 'build'
+      - 'release'
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: $REPO/$IMAGE_NAME
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+
+      # Install the cosign tool except on PR
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@main
+        with:
+          cosign-release: 'v1.9.0'
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      -
+        name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+
+      # Sign the resulting Docker image digest except on PRs.
+      # This will only write to the public Rekor transparency log when the Docker
+      # repository is public to avoid leaking data.  
+
+      - name: Sign image with Cosign
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        # This step uses the identity token to provision an ephemeral certificate
+        # against the sigstore community Fulcio instance.
+        run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
